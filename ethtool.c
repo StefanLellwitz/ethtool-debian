@@ -4940,6 +4940,79 @@ static int do_getmodule(struct cmd_context *ctx)
 	return 0;
 }
 
+static int do_smodule_eeprom(struct cmd_context *ctx)
+{
+    int changed = 0;
+    u32 offset = 0;
+    u32 length = 0;
+    u8 value = 0;
+    int length_seen = 0;
+    int value_seen = 0;
+    struct cmdline_info cmdline[] = {
+            { .name = "offset", .type = CMDL_U32, .wanted_val = &offset },
+            { .name = "length", .type = CMDL_U32, .wanted_val = &length,
+              .seen_val = &length_seen },
+            { .name = "value", .type = CMDL_U8, .wanted_val = &value,
+              .seen_val = &value_seen },
+    };
+    struct ethtool_modinfo modinfo;
+    struct ethtool_eeprom *eeprom;
+    int err;
+
+    parse_generic_cmdline(ctx, &changed, cmdline, ARRAY_SIZE(cmdline));
+
+    modinfo.cmd = ETHTOOL_GMODULEINFO;
+    err = send_ioctl(ctx, &modinfo);
+    if (err < 0) {
+            perror("Cannot get module EEPROM information");
+            return 1;
+    }
+
+    if (value_seen && !length_seen)
+            length = 1;
+    else if (!length_seen)
+            length = modinfo.eeprom_len;
+
+    if (modinfo.eeprom_len < offset + length) {
+            fprintf(stderr, "offset & length out of bounds\n");
+            return 1;
+    }
+
+    eeprom = calloc(1, sizeof(*eeprom) + length);
+    if (!eeprom) {
+            perror("Cannot allocate memory for Module EEPROM data");
+            return 1;
+    }
+
+    eeprom->cmd = ETHTOOL_SMODULEEEPROM;
+    eeprom->len = length;
+    eeprom->offset = offset;
+    eeprom->magic = 0;
+    eeprom->data[0] = value;
+
+    if (!value_seen) {
+            if (fread(eeprom->data, eeprom->len, 1, stdin) != 1) {
+                    fprintf(stderr, "not enough data from stdin\n");
+                    free(eeprom);
+                    return 75;
+            }
+            if ((fgetc(stdin) != EOF) || !feof(stdin)) {
+                    fprintf(stderr, "too much data from stdin\n");
+                    free(eeprom);
+                    return 75;
+            }
+    }
+
+    err = send_ioctl(ctx, eeprom);
+    if (err < 0) {
+            perror("Cannot set Module EEPROM data");
+            err = 87;
+    }
+    free(eeprom);
+
+    return err;
+}
+
 static int do_geee(struct cmd_context *ctx)
 {
 	struct ethtool_eee eeecmd;
@@ -5947,6 +6020,14 @@ static const struct option args[] = {
 			  "		[ bank N ]\n"
 			  "		[ i2c N ]\n"
 	},
+        {
+                .opts   = "--write-module-eeprom",
+                .func   = do_smodule_eeprom,
+                .help   = "Write bytes into module EEPROM",
+                .xhelp  = "             [ offset N ]\n"
+                          "             [ length N ]\n"
+                          "             [ value N ]\n"
+        },
 	{
 		.opts	= "--show-eee",
 		.func	= do_geee,
